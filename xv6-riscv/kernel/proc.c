@@ -6,6 +6,41 @@
 #include "proc.h"
 #include "defs.h"
 
+
+//globals
+uint tn; //Q2
+uint rate = 5; //Q3
+
+uint sleeping_proccess_mean = 0;
+uint running_proccess_mean = 0;
+uint runnable_proccess_mean = 0;
+
+uint n = 0; //num of exited proccess
+uint start_time = 0;
+uint program_time = 0;
+uint cpu_utilization = 0;
+void 
+updateMeanTicks(struct proc *p)
+{
+  p->mean_ticks = ((10-rate)*p->mean_ticks + p->last_ticks*(rate)) / 10;
+}
+uint
+getTicks(){
+  acquire(&tickslock);
+  uint t = ticks;
+  release(&tickslock);
+  return t;
+}
+void
+updateStats(struct proc *p) //will be called only on exit()
+{
+  running_proccess_mean = ((n * running_proccess_mean) + p->running_time) / (n + 1);
+  runnable_proccess_mean = ((n * runnable_proccess_mean) + p->runnable_time) / (n + 1);
+  sleeping_proccess_mean = ((n * sleeping_proccess_mean) + p->sleeping_time) / (n + 1);
+  n++;
+}
+
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -54,6 +89,7 @@ procinit(void)
       initlock(&p->lock, "proc");
       p->kstack = KSTACK((int) (p - proc));
   }
+  start_time = getTicks();
 }
 
 // Must be called with interrupts disabled,
@@ -243,7 +279,7 @@ userinit(void)
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
-
+  p->last_runnable_time = getTicks(); //Q3
   release(&p->lock);
 }
 
@@ -313,6 +349,17 @@ fork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+  //statistics
+  np->start_sleep = 0;
+  np->sleeping_time = 0;
+  np->runnable_time = 0;
+  np->running_time = 0;
+  //----
+  #ifdef SJF
+  np->mean_ticks = 0; //Q3
+  np->last_ticks = 0; //Q3
+  #endif
+  np->last_runnable_time = getTicks();
   release(&np->lock);
 
   return pid;
@@ -370,9 +417,16 @@ exit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
-
+  //--- added Q4 ---
+  if(p->pid != initproc->pid && p->pid != (initproc->pid +1)){ //not init or shell
+    program_time += p->running_time;
+    cpu_utilization = (program_time * 100) / (getTicks()-start_time);
+  }
+  updateStats(p); //Q4
+  // --------------
   release(&wait_lock);
 
+  
   // Jump into the scheduler, never to return.
   sched();
   panic("zombie exit");
@@ -426,6 +480,112 @@ wait(uint64 addr)
     sleep(p, &wait_lock);  //DOC: wait-sleep
   }
 }
+void
+pause_all()
+{ //busy wait
+  while(getTicks() < tn)
+  {
+    acquire(&tickslock);
+    ticks++;
+    release(&tickslock);
+  }
+}
+
+void
+SJF_Scheduler(struct cpu *c)
+{
+  struct proc *p;
+  struct proc *mean_p = 0;
+  uint mean_ticks = -1;
+  for(p = proc; p < &proc[NPROC]; p++)
+  {
+    if(p == 0) continue;
+    acquire(&p->lock);
+    if(p->state == RUNNABLE && (mean_ticks < 0 || (p->mean_ticks < mean_ticks))){
+      mean_p = p;
+      mean_ticks = mean_p->mean_ticks;
+    }
+    release(&p->lock);
+  }
+
+  if(mean_p == 0) return;
+  acquire(&mean_p->lock);
+  pause_all(); //added Q1
+  // Switch to chosen process.  It is the process's job
+  // to release its lock and then reacquire it
+  // before jumping back to us.
+  mean_p->state = RUNNING;
+  c->proc = mean_p;
+  uint start_time = getTicks();
+  mean_p->runnable_time += (start_time - mean_p->last_runnable_time);
+  swtch(&c->context, &mean_p->context);
+  mean_p->last_ticks = getTicks() - start_time;
+  mean_p->running_time+=mean_p->last_ticks;
+  updateMeanTicks(mean_p);
+  // Process is done running for now.
+  // It should have changed its p->state before coming back.
+  c->proc = 0;
+  release(&mean_p->lock);
+}
+
+void
+FCFS_Scheduler(struct cpu *c)
+{
+  struct proc *p;
+  struct proc *min_p = 0;
+  uint min = -1;
+  for(p = proc; p < &proc[NPROC]; p++)
+  {
+    if(p == 0) continue;
+    acquire(&p->lock);
+    if(p->state == RUNNABLE && (min < 0 || (p->last_runnable_time < min))){
+      min_p = p;
+      min = min_p->last_runnable_time;
+    }
+    release(&p->lock);
+  }
+  if(min_p == 0) return;
+  acquire(&min_p->lock);
+  pause_all(); //added Q1
+  // Switch to chosen process.  It is the process's job
+  // to release its lock and then reacquire it
+  // before jumping back to us.
+  min_p->state = RUNNING;
+  c->proc = min_p;
+  uint t = getTicks();
+  min_p->runnable_time+=(t - min_p->last_runnable_time);
+  swtch(&c->context, &min_p->context);
+  min_p->running_time+= (getTicks() - t);
+  // Process is done running for now.
+  // It should have changed its p->state before coming back.
+  c->proc = 0;
+  release(&min_p->lock);
+}
+
+void 
+Default_Scheduler(struct cpu *c)
+{
+  struct proc *p;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state == RUNNABLE) {
+      pause_all(); //added Q1
+      // Switch to chosen process.  It is the process's job
+      // to release its lock and then reacquire it
+      // before jumping back to us.
+      p->state = RUNNING;
+      c->proc = p;
+      uint t = getTicks();
+      p->runnable_time+= (t- p->last_runnable_time);
+      swtch(&c->context, &p->context);
+      p->running_time+= (getTicks() - t);
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      c->proc = 0;
+    }
+    release(&p->lock);
+  }
+}
 
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
@@ -437,30 +597,19 @@ wait(uint64 addr)
 void
 scheduler(void)
 {
-  struct proc *p;
-  struct cpu *c = mycpu();
   
+  struct cpu *c = mycpu();
   c->proc = 0;
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-      }
-      release(&p->lock);
-    }
+    #ifdef SJF
+      SJF_Scheduler(c);
+    #elif FCFS
+      FCFS_Scheduler(c);
+    #else
+      Default_Scheduler(c);
+    #endif
   }
 }
 
@@ -498,6 +647,7 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+  p->last_runnable_time = getTicks(); //Q3
   sched();
   release(&p->lock);
 }
@@ -543,7 +693,7 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
-
+  p->start_sleep = getTicks(); //Q4
   sched();
 
   // Tidy up.
@@ -566,6 +716,9 @@ wakeup(void *chan)
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
+        uint t = chan == &ticks ? ticks : getTicks();
+        p->last_runnable_time = t; //Q3
+        p->sleeping_time+= (t - p->start_sleep);
       }
       release(&p->lock);
     }
@@ -587,6 +740,8 @@ kill(int pid)
       if(p->state == SLEEPING){
         // Wake process from sleep().
         p->state = RUNNABLE;
+        p->last_runnable_time = getTicks(); //Q3
+        p->sleeping_time+= (getTicks()- p->start_sleep);
       }
       release(&p->lock);
       return 0;
@@ -653,4 +808,40 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int
+pause_system(int seconds)
+{
+  tn = getTicks() + (seconds * 250000); //for CPUs : 1 -> 2.5*10^5
+  struct proc * p = myproc();
+  if(p->pid != initproc->pid && p->pid != (initproc->pid) + 1){ //if not init or shell
+    yield();
+  }
+  return 0;
+}
+
+int
+kill_system(void)
+{
+  struct proc *p;
+  for(p = proc; p < &proc[NPROC]; p++){
+    if(p->pid != initproc->pid && p->pid != (initproc->pid) + 1){ //if not init or shell
+      if(kill(p->pid) < 0)
+        return -1;
+    }
+  }
+  return 0;
+}
+
+int
+print_stats(void)
+{
+  printf("Start Time: %d [ticks]\n", start_time);
+  printf("Program Time: %d [ticks]\n", program_time);
+  printf("CPU Utilization: %d %%\n", cpu_utilization);
+  printf("Running process mean: %d [ticks]\n", running_proccess_mean);
+  printf("Runnable process mean: %d [ticks]\n", runnable_proccess_mean);
+  printf("Sleeping process mean: %d [ticks]\n", sleeping_proccess_mean);
+  return 0;
 }
