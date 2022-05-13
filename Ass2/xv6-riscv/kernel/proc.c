@@ -657,8 +657,8 @@ void
 yield(void)
 {
   //printf("enter yeild\n");
-  struct cpu *c = mycpu();
   struct proc *p = myproc();
+  struct cpu *c = &cpus[p->my_cpu_id];
   acquire(&p->lock);
   p->state = RUNNABLE;
   addToList(&c->runnables,p->my_proc_index); //added
@@ -826,4 +826,30 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int
+set_cpu(int cpu_num)
+{
+  if(cpu_num < 0 || cpu_num >= NCPU || &cpus[cpu_num] == 0)
+  {
+    return -1;
+  }
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  p->my_cpu_id = cpu_num;
+  release(&p->lock);
+  yield();
+  return cpu_num;
+}
+
+int
+get_cpu()
+{
+  return cpuid();
+  // struct proc *p = myproc();
+  // acquire(&p->lock);
+  // int id = p->my_cpu_id;
+  // release(&p->lock);
+  //return id;
 }
