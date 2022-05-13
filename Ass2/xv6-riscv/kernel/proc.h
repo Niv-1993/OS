@@ -21,8 +21,9 @@ struct context {
 //List
 struct list {
   struct spinlock lst_lock;   //lock for list
-  struct proc *head;          //head of the list
-  struct proc *tail;          //tail
+  int head;                   //the head of the list
+  int tail;                   //the last process index in list
+  char *name;                 //debug
   //int size;                   //num of processes in list
 };
 
@@ -102,8 +103,9 @@ struct proc {
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
 
-  struct proc * next;  //next to point to
-  struct proc * prev;  //next to point to
+  int next;            //next to point to from 0-63
+  int prev;
+  int my_proc_index;    //index from 0-63
   int my_cpu_id;      //the cpu id that was last runnable
 
   // wait_lock must be held when using this:
