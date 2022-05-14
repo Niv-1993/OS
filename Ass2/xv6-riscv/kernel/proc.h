@@ -24,7 +24,7 @@ struct list {
   int head;                   //the head of the list
   int tail;                   //the last process index in list
   char *name;                 //debug
-  //int size;                   //num of processes in list
+  //int size;                  //num of processes in list
 };
 
 // Per-CPU state.
@@ -34,6 +34,7 @@ struct cpu {
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
   struct list runnables;      // the list of runnable processes
+  uint64 counter;             //num of proccess admitted to this cpu's runnable list
 };
 
 extern struct cpu cpus[NCPU];
