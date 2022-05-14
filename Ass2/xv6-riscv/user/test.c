@@ -12,6 +12,20 @@
 int
 main(int argc, char *argv[])
 {
-    
-    return 0;
+    int i = get_cpu();
+    printf("curr cpu: [%d]\n",i);
+    int j = set_cpu(1);
+    printf("j: %d\n",j);
+    int k = get_cpu();
+    printf("last cpu : [%d] curr cpu: [%d]\n",i,k);
+    int x = fork();
+    if(x == 0){
+      printf("child cpu: %d",get_cpu());
+    }
+    else{
+      printf("parent cpu: %d",get_cpu());
+    }
+
+    exit(0);
+
 }
