@@ -25,26 +25,37 @@ struct list zombies;
 struct list unuseds;
 struct list sleepings;
 
-// void
-// printList(struct list *lst)
-// {
-//     char* name = lst->name == 0? "RUNNABLES": lst->name;
-//     int size = 0;
-//     printf("%s: ",name);
-//     int i = lst->head;
-//     if(i == -1){
-//       return;
-//     }
-//     printf("\n");
-//     struct proc *p;
-//     while(i!=-1){
-//       p = &proc[i];
-//       printf("[%d] ",p->pid);
-//       i = p->next;
-//       size++;
-//     }
-//     printf("\nsize: [%d]\n----------------------\n",size);  
-// }
+char*
+getState(enum procstate state)
+{
+  return state == RUNNABLE? "RUNNABLE":
+  state == SLEEPING ? "SLEEPING":
+  state == RUNNING ? "RUNNING":
+  state == ZOMBIE ? "ZOMBIE" :
+  state == UNUSED ? "UNUSED" :
+  "USED";
+}
+void
+printList(struct list *lst)
+{
+    char* name = lst->name == 0? "RUNNABLES": lst->name;
+    int size = 0;
+    printf("%s: ",name);
+    int i = lst->head;
+    if(i == -1){
+      printf("empty.\n");
+      return;
+    }
+    printf("\n");
+    struct proc *p;
+    while(i!=-1){
+      p = &proc[i];
+      printf("[%d] ",p->my_proc_index);
+      i = p->next;
+      size++;
+    }
+    printf("\nsize: [%d]\n----------------------\n",size);  
+}
 
 // void printAllLists()
 // {
@@ -80,102 +91,106 @@ get_min_cpu()
  return res;
 }
 
-
 void
 initLists()
 {
   unuseds.name = "UNUSED";
   unuseds.head = -1;
-  unuseds.tail = -1;
-  unuseds.lst_lock.name = "unused list lock";
+  initlock(&unuseds.head_lock,"unused list lock");
   zombies.name = "ZOMBIES";
   zombies.head = -1;
-  zombies.tail = -1;
-  zombies.lst_lock.name = "zombies list lock";
+  initlock(&zombies.head_lock,"zombies list lock");
   sleepings.name = "SLEEPING";
   sleepings.head = -1;
-  sleepings.tail = -1;
-  sleepings.lst_lock.name = "sleepings list lock";
+  initlock(&sleepings.head_lock,"sleepings list lock");
   struct cpu *c;
   for(int i =0; i< CPUS; i++)
   {
     c = &cpus[i];
     c->runnables.head = -1;
-    c->runnables.tail = -1;
     c->runnables.name = "RUNNABLE";
-    c->runnables.lst_lock.name = "runnable list lock";
+    initlock(&c->runnables.head_lock,"runnable list lock");
     c->counter = 0;
   }
 }
 
+//list not aquired
+//proc with index is acquired
 int
 addToList(struct list *lst, int index)
 {
-  if(lst->head == -1){
-    lst->head = index;
-    lst->tail = index;
+  acquire(&proc[index].llock);
+  int head_index;
+  acquire(&lst->head_lock);
+  head_index = lst->head;
+  if(head_index == -1)
+  {
     struct proc *head = &proc[index];
     head->next = -1;
-    head->prev = -1;
+    lst->head = index;
+    release(&lst->head_lock);
   }
   else{
-    struct proc *to_add = &proc[index];
-    struct proc *last = &proc[lst->tail];
-    acquire(&last->lock);
-    last->next = index;
-    release(&last->lock);
-    to_add->prev = lst->tail;
-    lst->tail = index;
-    
+    struct proc *curr = &proc[head_index];
+    acquire(&curr->llock);
+    release(&lst->head_lock);
+    while(curr->next != -1){
+      int i = curr->next;
+      acquire(&proc[i].llock);
+      release(&curr->llock);
+      curr = &proc[i];
+    }
+    curr->next = index;
+    proc[index].next = -1;
+    release(&curr->llock);
   }
+  release(&proc[index].llock);
   return 0;
 }
 
+//lst->head_lock held and release here
 int
 removeFromList(struct list *lst,int index)
 {
+  int head_index = lst->head;
   if(lst->head == -1){
     panic("removed from empty list");
   }
-  if(lst->head == index && lst->tail == index){ //list has 1 proc only
+  if(lst->head == index && proc[head_index].next == -1){ //list has 1 proc only
     lst->head = -1;
-    lst->tail = -1;
+    release(&lst->head_lock);
   }
-  else if(lst->head == index){  //at least 2 procesess & need to remove the proc at head
-    struct proc *to_remove = &proc[index];
-    lst->head = to_remove->next;
-    to_remove->next = -1;
-    struct proc *new_head = &proc[lst->head];
-    acquire(&new_head->lock);
-    new_head->prev = -1;
-    release(&new_head->lock);
+  else if(lst->head == index)
+  {
+    acquire(&proc[head_index].llock);
+    struct proc *next = &proc[proc[head_index].next];
+    proc[head_index].next = -1;
+    release(&proc[head_index].llock);
+    acquire(&next->llock);
+    lst->head = next->my_proc_index;
+    release(&next->llock);
+    release(&lst->head_lock);
   }
-  else if(lst->tail == index){ //at least 2 processes & need to remove the tail
-    struct proc *old_tail = &proc[index];
-    lst->tail = old_tail->prev;
-    old_tail->prev = -1;
-    struct proc *new_tail = &proc[lst->tail];
-    acquire(&new_tail->lock);
-    new_tail->next = -1;
-    release(&new_tail->lock);
-
-  }
-  else{  //at least 3 procesess & delete from middle
-    struct proc *me = &proc[index];
-    struct proc *left = &proc[me->prev];
-    acquire(&left->lock);
-    left->next = me->next;
-    release(&left->lock);
-
-    struct proc *right = &proc[me->next];
-    acquire(&right->lock);
-    right->prev = me->prev;
-    release(&right->lock);
-    me->next = -1;
-    me->prev = -1;
+  else {
+    struct proc *pred = &proc[head_index];
+    acquire(&pred->llock);
+    release(&lst->head_lock);
+    struct proc *curr = &proc[pred->next];
+    acquire(&curr->llock);
+    while(curr->my_proc_index != index){
+      release(&pred->llock);
+      pred = curr;
+      curr = &proc[curr->next];
+      acquire(&curr->llock);
+    }
+    pred->next = curr->next;
+    curr->next = -1;
+    release(&curr->llock);
+    release(&pred->llock);
   }
   return 0;
 }
+
 
 // helps ensure that wakeups of wait()ing
 // parents are not lost. helps obey the
@@ -215,11 +230,9 @@ procinit(void)
       p->kstack = KSTACK((int) (p - proc));
       //added
       p->next = -1;
-      p->prev = -1;
       p->my_proc_index = i++;
-      acquire(&unuseds.lst_lock);
+      initlock(&p->llock,"llock");
       addToList(&unuseds,p->my_proc_index);
-      release(&unuseds.lst_lock);
   }
 }
 
@@ -265,22 +278,25 @@ allocpid() {
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
 // If there are no free procs, or a memory allocation fails, return 0.
-// unuseds.lst_lock -> must be held
 static struct proc*
 allocproc(void)
 {
-  int i = unuseds.head;
-  if(i ==-1){
+  acquire(&unuseds.head_lock);
+  struct proc *p = unuseds.head == -1? 0 : &proc[unuseds.head];
+  if(p == 0){
+    release(&unuseds.head_lock);
     return 0;
   }
-  struct proc *p = &proc[i];
+  removeFromList(&unuseds,p->my_proc_index); //this releases the head_lock
   acquire(&p->lock);
+
   if(p->state != UNUSED)
   {
     panic("state is not unused!");
   }
-  
+
   p->pid = allocpid();
+
   p->state = USED;
 
   // Allocate a trapframe page.
@@ -303,7 +319,6 @@ allocproc(void)
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
-
   return p;
 }
 
@@ -328,12 +343,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
-
-
-  acquire(&zombies.lst_lock);
-  removeFromList(&zombies,p->my_proc_index);
-  release(&zombies.lst_lock);
-  
+  acquire(&zombies.head_lock);
+  removeFromList(&zombies,p->my_proc_index); //this releases the head_lock
   addToList(&unuseds,p->my_proc_index);
 }
 
@@ -397,7 +408,6 @@ void
 userinit(void)
 {
   struct proc *p;
-  acquire(&unuseds.lst_lock);
   p = allocproc();
   initproc = p;
 
@@ -419,12 +429,8 @@ userinit(void)
   struct cpu *curr_cpu = &cpus[0];
   initproc->my_cpu_id = 0;
 
-  removeFromList(&unuseds,p->my_proc_index);
-  release(&unuseds.lst_lock);
-
-  acquire(&curr_cpu->runnables.lst_lock);
   addToList(&curr_cpu->runnables,p->my_proc_index);
-  release(&curr_cpu->runnables.lst_lock);
+
   #ifdef ON
   incrementCounter(curr_cpu);
   #endif
@@ -462,15 +468,13 @@ fork(void)
   struct proc *np;
   struct proc *p = myproc();
   // Allocate process.
-  acquire(&unuseds.lst_lock);
   if((np = allocproc()) == 0){
-    release(&unuseds.lst_lock);//added
     return -1;
   }
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+    printf("THE CHECK OF STATE [fork uvmcopy]: %s , index: %d",getState(np->state),np->my_proc_index);
     freeproc(np);
-    release(&unuseds.lst_lock);
     release(&np->lock);
     return -1;
   }
@@ -500,10 +504,7 @@ fork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
-  //added
-  removeFromList(&unuseds,np->my_proc_index);
-  release(&unuseds.lst_lock);
-  
+
   #ifdef ON
   np->my_cpu_id = get_min_cpu();
   #else
@@ -511,9 +512,8 @@ fork(void)
   #endif
 
   struct cpu *c = &cpus[np->my_cpu_id];
-  acquire(&c->runnables.lst_lock);
+
   addToList(&c->runnables,np->my_proc_index);
-  release(&c->runnables.lst_lock);
 
   #ifdef ON
   incrementCounter(c);
@@ -575,9 +575,8 @@ exit(int status)
   p->xstate = status;
   p->state = ZOMBIE;
 
-  acquire(&zombies.lst_lock);
   addToList(&zombies,p->my_proc_index);
-  release(&zombies.lst_lock);
+
 
   release(&wait_lock);
 
@@ -615,9 +614,7 @@ wait(uint64 addr)
             release(&wait_lock);
             return -1;
           }
-          acquire(&unuseds.lst_lock); //added
           freeproc(np);
-          release(&unuseds.lst_lock); //added
           release(&np->lock);
           release(&wait_lock);
           return pid;
@@ -654,15 +651,14 @@ scheduler(void)
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
     while(1){
-      acquire(&c->runnables.lst_lock);
+      acquire(&c->runnables.head_lock);
       if(c->runnables.head == -1){
-        release(&c->runnables.lst_lock);
+        release(&c->runnables.head_lock);
         break;
       }
       p = &proc[c->runnables.head];
       acquire(&p->lock);
-      removeFromList(&c->runnables,p->my_proc_index);
-      release(&c->runnables.lst_lock);
+      removeFromList(&c->runnables,p->my_proc_index); //this will release the head_lock
       // Switch to chosen process.  It is the process's job
       // to release its lock and then reacquire it
       // before jumping back to us.
@@ -714,9 +710,7 @@ yield(void)
   struct cpu *c = &cpus[p->my_cpu_id];
   acquire(&p->lock);
   p->state = RUNNABLE;
-  acquire(&c->runnables.lst_lock);
   addToList(&c->runnables,p->my_proc_index); //added
-  release(&c->runnables.lst_lock);
   sched();
   release(&p->lock);
 }
@@ -757,9 +751,7 @@ sleep(void *chan, struct spinlock *lk)
 
   acquire(&p->lock);  //DOC: sleeplock1
 
-  acquire(&sleepings.lst_lock);
   addToList(&sleepings,p->my_proc_index); //added
-  release(&sleepings.lst_lock);
 
   release(lk);
 
@@ -784,31 +776,65 @@ void
 wakeup(void *chan)
 {
   struct proc *p;
-  acquire(&sleepings.lst_lock);
-  int i = sleepings.head;
-  while(i != -1){
-    p = &proc[i];
-    acquire(&p->lock);
-    i = p->next;
-    if(p->chan == chan){
-      p->state = RUNNABLE;
-      removeFromList(&sleepings,p->my_proc_index);
-      #ifdef ON
-      struct cpu *c = &cpus[get_min_cpu()];
-      #else
-      struct cpu *c = &cpus[p->my_cpu_id];
-      #endif
-      acquire(&c->runnables.lst_lock);
-      addToList(&c->runnables,p->my_proc_index);
-      release(&c->runnables.lst_lock);
-      #ifdef ON
-      incrementCounter(c);
-      #endif
+
+  for(p = proc; p < &proc[NPROC]; p++) {
+    if(p != myproc()){
+      acquire(&p->lock);
+      if(p->state == SLEEPING && p->chan == chan) {
+        acquire(&sleepings.head_lock);
+        removeFromList(&sleepings,p->my_proc_index); //this will release head_lock
+        p->state = RUNNABLE;
+
+        #ifdef ON
+        struct cpu *c = &cpus[get_min_cpu()];
+        #else
+        struct cpu *c = &cpus[p->my_cpu_id];
+        #endif
+        addToList(&c->runnables,p->my_proc_index);
+
+        #ifdef ON
+        incrementCounter(c);
+        #endif
+      }
+      release(&p->lock);
     }
-    release(&p->lock);
   }
-  release(&sleepings.lst_lock);  
 }
+
+// void
+// wakeup(void *chan)
+// {
+//   struct proc *p;
+//   acquire(&sleepings.head_lock);
+//   int i = sleepings.head;
+//   int entered = 0;
+//   while(i != -1){
+//     entered = 1;
+//     p = &proc[i];
+//     acquire(&p->lock);
+//     i = p->next;
+//     if(p->chan == chan){
+//       p->state = RUNNABLE;
+//       removeFromList(&sleepings,p->my_proc_index);
+//       #ifdef ON
+//       struct cpu *c = &cpus[get_min_cpu()];
+//       #else
+//       struct cpu *c = &cpus[p->my_cpu_id];
+//       #endif
+
+//       addToList(&c->runnables,p->my_proc_index);
+//       #ifdef ON
+//       incrementCounter(c);
+//       #endif
+//     }else{
+//       release(&sleepings.head_lock);
+//     }
+//     release(&p->lock);
+//   }
+//   if(entered == 0){
+//     release(&sleepings.head_lock);  
+//   }
+// }
 
 
 // Kill the process with the given pid.
@@ -826,13 +852,10 @@ kill(int pid)
       if(p->state == SLEEPING){
         // Wake process from sleep().
         p->state = RUNNABLE;
-        acquire(&sleepings.lst_lock);
-        removeFromList(&sleepings,p->my_proc_index);
-        release(&sleepings.lst_lock);
+        acquire(&sleepings.head_lock);
+        removeFromList(&sleepings,p->my_proc_index); //this will release head_lock
         struct cpu *c = &cpus[p->my_cpu_id];
-        acquire(&c->runnables.lst_lock);
         addToList(&c->runnables,p->my_proc_index);
-        release(&c->runnables.lst_lock);
         #ifdef ON
         incrementCounter(c);
         #endif
