@@ -748,10 +748,9 @@ sleep(void *chan, struct spinlock *lk)
   // guaranteed that we won't miss any wakeup
   // (wakeup locks p->lock),
   // so it's okay to release lk.
+  addToList(&sleepings,p->my_proc_index); //added
 
   acquire(&p->lock);  //DOC: sleeplock1
-
-  addToList(&sleepings,p->my_proc_index); //added
 
   release(lk);
 
@@ -800,43 +799,6 @@ wakeup(void *chan)
     }
   }
 }
-
-// void
-// wakeup(void *chan)
-// {
-//   struct proc *p;
-//   acquire(&sleepings.head_lock);
-//   int i = sleepings.head;
-//   int entered = 0;
-//   while(i != -1){
-//     entered = 1;
-//     p = &proc[i];
-//     acquire(&p->lock);
-//     i = p->next;
-//     if(p->chan == chan){
-//       p->state = RUNNABLE;
-//       removeFromList(&sleepings,p->my_proc_index);
-//       #ifdef ON
-//       struct cpu *c = &cpus[get_min_cpu()];
-//       #else
-//       struct cpu *c = &cpus[p->my_cpu_id];
-//       #endif
-
-//       addToList(&c->runnables,p->my_proc_index);
-//       #ifdef ON
-//       incrementCounter(c);
-//       #endif
-//     }else{
-//       release(&sleepings.head_lock);
-//     }
-//     release(&p->lock);
-//   }
-//   if(entered == 0){
-//     release(&sleepings.head_lock);  
-//   }
-// }
-
-
 // Kill the process with the given pid.
 // The victim won't exit until it tries to return
 // to user space (see usertrap() in trap.c).
@@ -855,12 +817,14 @@ kill(int pid)
         acquire(&sleepings.head_lock);
         removeFromList(&sleepings,p->my_proc_index); //this will release head_lock
         struct cpu *c = &cpus[p->my_cpu_id];
+        release(&p->lock);
         addToList(&c->runnables,p->my_proc_index);
         #ifdef ON
         incrementCounter(c);
         #endif
+      }else{
+        release(&p->lock);
       }
-      release(&p->lock);
       return 0;
     }
     release(&p->lock);
