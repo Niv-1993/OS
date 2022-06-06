@@ -65,6 +65,12 @@ usertrap(void)
     intr_on();
 
     syscall();
+  }else if(r_scause() == 15){
+    //page write fault
+    uint64 va = r_stval();
+    if(cow_handle(p->pagetable,va) == -1){
+      p->killed = 1;
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
@@ -72,7 +78,6 @@ usertrap(void)
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
-
   if(p->killed)
     exit(-1);
 
