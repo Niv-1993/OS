@@ -68,9 +68,9 @@ usertrap(void)
   }else if(r_scause() == 15){
     //page write fault
     uint64 va = r_stval();
-    if(cow_handle(p->pagetable,va) == -1){
+    uint64 cow = cow_handle(p->pagetable,va);
+    if(cow == -1)
       p->killed = 1;
-    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {

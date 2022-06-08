@@ -308,14 +308,15 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
-    pa = PTE2PA(*pte);
-
+    
     *pte = ((*pte) & (~PTE_W)) | PTE_COW;// -Write + COW for parent's page
+    pa = PTE2PA(*pte);
     // same flag for child's page
     if(mappages(new, i, PGSIZE, pa,(uint)PTE_FLAGS(*pte)) != 0){
       goto err;
     }
-    inc_counter(pa);
+    // inc counter (child of fork)
+    inc_counter(pa); 
   }
   return 0;
 
@@ -443,23 +444,20 @@ cow_handle(pagetable_t page_table, uint64 va)
   va = PGROUNDDOWN(va);
   if(va >= MAXVA) //if not in scope of mem
     return -1;
-  pte_t *pte = walk(page_table,va,0);
-  if(pte == 0){//if not valid va
+  pte_t *pte = walk(page_table,va,0); 
+  if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_COW) == 0){  // check if not vaild or not cow
     return -1;
   }
-  if((*pte & PTE_V) == 0 || (*pte & PTE_COW) == 0){
+  char* mem ;
+  if((mem = kalloc()) == 0){
     return -1;
-  }
-  char* mem = kalloc();
-  if(mem != 0){
-    uint64 pa = PTE2PA(*pte);
-    memmove(mem,(char*)pa,PGSIZE);
-    *pte = PA2PTE(mem) | ((PTE_FLAGS(*pte) & (~PTE_COW)) | PTE_W);
-    //inorder to decrease the ref counter.
-    kfree((void*)pa);
-    return 0;
   }
   else{
-    return -1;
+    uint64 pa = PTE2PA(*pte);
+    memmove(mem,(char*)pa,PGSIZE);
+    //inorder to decrease the ref counter.
+    kfree((void*)pa);
+    *pte = PA2PTE(mem) | ((PTE_FLAGS(*pte) & (~PTE_COW)) | PTE_W);
+    return 0;
   }
 }

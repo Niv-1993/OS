@@ -10,24 +10,18 @@
 #include "defs.h"
 
 #define NUM_PYS_PAGES ((PHYSTOP-KERNBASE)/PGSIZE)
+#define PA2INDEX(pa) ((pa-KERNBASE)/PGSIZE)
 extern uint64 cas(volatile void *addr , int expected , int newval);
 
 uint counter[NUM_PYS_PAGES];
-
-uint
-PA2INDX(uint64 pa)
-{
-  return (pa-KERNBASE)/PGSIZE; 
-}
-
 
 void
 set_counter(uint64 pa, int n)
 {
   uint old;
   do{
-    old = counter[PA2INDX(pa)];
-  }while(cas(&counter[PA2INDX(pa)],old,n));
+    old = counter[PA2INDEX(pa)];
+  }while(cas(&counter[PA2INDEX(pa)],old,n));
 }
 
 
@@ -36,8 +30,8 @@ inc_counter(uint64 pa)
 {
   uint old;
   do{
-    old = counter[PA2INDX(pa)];
-  }while(cas(&counter[PA2INDX(pa)],old,old+1));
+    old = counter[PA2INDEX(pa)];
+  }while(cas(&counter[PA2INDEX(pa)],old,old+1));
 }
 
 uint
@@ -45,8 +39,8 @@ dec_counter(uint64 pa)
 {
   uint old;
   do{
-    old = counter[PA2INDX(pa)];
-  }while(cas(&counter[PA2INDX(pa)],old,old-1));
+    old = counter[PA2INDEX(pa)];
+  }while(cas(&counter[PA2INDEX(pa)],old,old-1));
   return old-1;
 }
 
@@ -67,7 +61,8 @@ struct {
 void
 kinit()
 {
-  memset(counter, 0, sizeof(int)*((PHYSTOP-KERNBASE)/PGSIZE));
+  //added
+  memset(counter, 0, sizeof(int)*((PHYSTOP-KERNBASE)/PGSIZE));  //init counter array with 0
   initlock(&kmem.lock, "kmem");
   freerange(end, (void*)PHYSTOP);
 }
@@ -78,7 +73,6 @@ freerange(void *pa_start, void *pa_end)
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE){
-    set_counter((uint64)p,1); //********************************************************
     kfree(p);
   }
 }
@@ -94,13 +88,15 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
-  if(counter[PA2INDX((uint64)pa)] > 1){
+  if(counter[PA2INDEX((uint64)pa)] > 1){ 
+    // there is another refernce to pa;
     dec_counter((uint64)pa);
     return;
   }
+  // no more refernces to pa;
+  set_counter((uint64)pa,0);
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
-  set_counter((uint64)pa,0);
   r = (struct run*)pa;
 
   acquire(&kmem.lock);
@@ -122,10 +118,10 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r){
+    set_counter((uint64)r,1);  // set counter of r to 1
     memset((char*)r, 5, PGSIZE); // fill with junk
+  }
   
-  if(r)
-    set_counter((uint64)r,1);
   return (void*)r;
 }
