@@ -16,12 +16,12 @@ extern uint64 cas(volatile void *addr , int expected , int newval);
 uint counter[NUM_PYS_PAGES];
 
 void
-set_counter(uint64 pa, int n)
+set_counter(uint64 pa, int num)
 {
   uint old;
   do{
     old = counter[PA2INDEX(pa)];
-  }while(cas(&counter[PA2INDEX(pa)],old,n));
+  }while(cas(&counter[PA2INDEX(pa)],old,num));
 }
 
 
@@ -62,7 +62,7 @@ void
 kinit()
 {
   //added
-  memset(counter, 0, sizeof(int)*((PHYSTOP-KERNBASE)/PGSIZE));  //init counter array with 0
+  memset(counter, 0, sizeof(int)*NUM_PYS_PAGES);  //init counter array with 0
   initlock(&kmem.lock, "kmem");
   freerange(end, (void*)PHYSTOP);
 }
