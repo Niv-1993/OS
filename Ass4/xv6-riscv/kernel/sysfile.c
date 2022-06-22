@@ -18,6 +18,35 @@
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
+
+#define MAX_DEREFERENCE 31
+
+struct inode *
+do_deep(struct inode * ip)
+{
+  if(ip->type == T_SYMLINK){
+    int cycle = 0;
+    char target[MAXPATH];
+    while(ip->type == T_SYMLINK){
+      if(cycle == MAX_DEREFERENCE){
+        iunlockput(ip);
+        end_op();
+        return 0; // max cycle
+      }
+      cycle++;
+      memset(target, 0, sizeof(target));
+      readi(ip, 0, (uint64)target, 0, MAXPATH);
+      iunlockput(ip);
+      if((ip = namei(target)) == 0){  // return inode for target (path name)
+        end_op();
+        return 0; // target not exist
+      }
+      ilock(ip);
+    }
+  }
+  return ip;
+}
+
 static int
 argfd(int n, int *pfd, struct file **pf)
 {
@@ -252,6 +281,9 @@ create(char *path, short type, short major, short minor)
   if((ip = dirlookup(dp, name, 0)) != 0){
     iunlockput(dp);
     ilock(ip);
+    if(type == T_SYMLINK){ //added
+      return ip;
+    }
     if(type == T_FILE && (ip->type == T_FILE || ip->type == T_DEVICE))
       return ip;
     iunlockput(ip);
@@ -319,6 +351,10 @@ sys_open(void)
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
     iunlockput(ip);
     end_op();
+    return -1;
+  }
+  ip = do_deep(ip);
+  if(ip == 0){
     return -1;
   }
 
@@ -440,8 +476,26 @@ sys_exec(void)
     if(fetchstr(uarg, argv[i], PGSIZE) < 0)
       goto bad;
   }
-
-  int ret = exec(path, argv);
+  //added
+  struct inode* ip1 = namei(path);
+  if(ip1 == 0)
+  {
+    goto bad;
+  }
+  struct inode *ip2 = do_deep(ip1);
+  if(ip2 == 0){
+    goto bad;
+  }
+  int ret;
+  if(ip1 != ip2){
+    char new_path[MAXPATH];
+    readi(ip2,0,(uint64)new_path,0,ip2->size);
+    ret = exec(new_path, argv);
+    // printf("old path %s ----- new path: %s\n",path,new_path);
+  }else{
+    ret = exec(path, argv);
+  }
+  
 
   for(i = 0; i < NELEM(argv) && argv[i] != 0; i++)
     kfree(argv[i]);
@@ -484,3 +538,64 @@ sys_pipe(void)
   }
   return 0;
 }
+
+
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH], path[MAXPATH];
+  memset(target,0,sizeof(target)); // fill target with null
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0){
+    return -1;
+  }
+  if(namei(path) != 0){ //file exists
+    return -1;
+  }
+  begin_op();
+  struct inode *ip = create(path, T_SYMLINK, 0, 0);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+  int len=strlen(target);
+  if(writei(ip, 0, (uint64)target, 0, len+1) != len+1){
+    return -1;
+  }
+  iupdate(ip); //check if needed
+  iunlockput(ip);
+
+  end_op();
+  return 0;
+}
+
+uint64
+sys_readlink(void)
+{
+  int bufsize;
+  if(argint(2, &bufsize) < 0){
+    return -1;
+  }
+  uint64 buf;
+  char pathname[MAXPATH];
+  memset(pathname,0,sizeof(pathname)); // fill pathname with null
+  if (argstr(0,pathname,MAXPATH) < 0 || argaddr(1, &buf) < 0)
+    return -1;
+  struct inode *ip; 
+  if((ip = namei(pathname)) == 0)  //pathname does not exists
+    return -1;
+  ilock(ip);
+  if(ip->type != T_SYMLINK)  //it is not a symbolic link
+  {
+    iunlock(ip);
+    return -1;
+  }
+  if(bufsize < ip->size){
+    iunlock(ip);
+    return -1;
+  }
+  readi(ip,1,buf,0,ip->size);
+  iunlock(ip);
+  return 0;
+}
+
+

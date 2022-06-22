@@ -14,9 +14,6 @@
 void sanityCheckFirstPart(void)
 {
     char* buf = malloc(10*MB);
-//   char *direct = malloc(12*KB);
-//   char *single = malloc(268*KB);
-//   char *d_indirect = malloc(10*MB);
     for(int i = 0; i < 10*MB;i++){
         buf[i] = 'X';
     }
@@ -61,5 +58,5 @@ int
 main(int argc, char *argv[])
 {
     sanityCheckFirstPart();
-    return 0;
+    exit(0);
 }

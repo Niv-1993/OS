@@ -23,6 +23,9 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
+//added
+int symlink(const char*, const char*);
+int readlink(const char*, char*,int);
 
 // ulib.c
 int stat(const char*, struct stat*);
