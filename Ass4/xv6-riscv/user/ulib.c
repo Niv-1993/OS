@@ -75,8 +75,7 @@ stat(const char *n, struct stat *st)
 {
   int fd;
   int r;
-
-  fd = open(n, O_RDONLY);
+  fd = (strcmp(n,"./..") == 0 || strcmp(n,"./.") == 0) ? open(n,O_RDONLY):open(n, O_RDONLY | O_DONTREF);
   if(fd < 0)
     return -1;
   r = fstat(fd, st);

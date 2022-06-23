@@ -47,6 +47,40 @@ do_deep(struct inode * ip)
   return ip;
 }
 
+int
+exec_path(struct inode * ip, char* target){
+  if(ip->type == T_SYMLINK){
+    int cycle = 0;
+    while(ip->type == T_SYMLINK){
+      if(cycle == MAX_DEREFERENCE){
+        iunlockput(ip);
+        end_op();
+        return -1; // max cycle
+      }
+      cycle++;
+      memset(target, 0, sizeof(target));
+      readi(ip, 0, (uint64)target, 0, MAXPATH);
+      iunlockput(ip);
+      if((ip = namei(target)) == 0){  // return inode for target (path name)
+        end_op();
+        return -1; // target not exist
+      }
+      if(ip->type != T_SYMLINK){
+        break;
+      }
+      ilock(ip);
+    }
+    end_op();
+    iunlockput(ip);
+    return 1;
+  }
+  else{
+    end_op();
+    iunlockput(ip);
+    return 0;
+  }
+}
+
 static int
 argfd(int n, int *pfd, struct file **pf)
 {
@@ -222,11 +256,12 @@ sys_unlink(void)
     return -1;
 
   begin_op();
+
   if((dp = nameiparent(path, name)) == 0){
     end_op();
     return -1;
   }
-
+  printf("path[%s], name: [%s]",path,name);
   ilock(dp);
 
   // Cannot unlink "." or "..".
@@ -353,9 +388,11 @@ sys_open(void)
     end_op();
     return -1;
   }
-  ip = do_deep(ip);
-  if(ip == 0){
-    return -1;
+  if(!(omode & O_DONTREF)){
+    ip = do_deep(ip);
+    if(ip == 0){
+      return -1;
+    }
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
@@ -436,6 +473,13 @@ sys_chdir(void)
     return -1;
   }
   ilock(ip);
+  ip = do_deep(ip);
+  if(ip == 0){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
   if(ip->type != T_DIR){
     iunlockput(ip);
     end_op();
@@ -477,25 +521,28 @@ sys_exec(void)
       goto bad;
   }
   //added
-  struct inode* ip1 = namei(path);
-  if(ip1 == 0)
+  struct inode* ip = namei(path);
+  if(ip== 0)
   {
     goto bad;
   }
-  struct inode *ip2 = do_deep(ip1);
-  if(ip2 == 0){
+  char new_path[MAXPATH];
+  memset(new_path,0,MAXPATH);
+  begin_op();
+  ilock(ip);
+  int result = exec_path(ip,new_path);
+  if(result == -1){
     goto bad;
   }
   int ret;
-  if(ip1 != ip2){
-    char new_path[MAXPATH];
-    readi(ip2,0,(uint64)new_path,0,ip2->size);
+  if(result != 0){
     ret = exec(new_path, argv);
-    // printf("old path %s ----- new path: %s\n",path,new_path);
-  }else{
-    ret = exec(path, argv);
   }
-  
+  else{
+    ret= exec(path, argv);
+  }
+  //printf("result[%d]  old path %s ----- new path: %s\n",result,path,new_path);
+
 
   for(i = 0; i < NELEM(argv) && argv[i] != 0; i++)
     kfree(argv[i]);

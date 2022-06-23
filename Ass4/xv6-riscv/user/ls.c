@@ -22,6 +22,25 @@ fmtname(char *path)
   return buf;
 }
 
+char*
+toname(char *path)
+{
+  static char buf[DIRSIZ+1];
+  char *p;
+
+  // Find first character after last slash.
+  for(p=path+strlen(path); p >= path && *p != '/'; p--)
+    ;
+  p++;
+
+  // Return blank-padded name.
+  if(strlen(p) >= DIRSIZ)
+    return p;
+  memmove(buf, p, strlen(p));
+  // memset(buf+strlen(p), ' ', DIRSIZ-strlen(p));
+  return buf;
+}
+
 void
 ls(char *path)
 {
@@ -29,8 +48,8 @@ ls(char *path)
   int fd;
   struct dirent de;
   struct stat st;
-
-  if((fd = open(path, 0)) < 0){
+  fd = (strcmp(path,".") == 0 || strcmp(path,"..") == 0) ? open(path,0):open(path, 0 | 3);
+  if(fd < 0){
     fprintf(2, "ls: cannot open %s\n", path);
     return;
   }
@@ -40,8 +59,15 @@ ls(char *path)
     close(fd);
     return;
   }
-
+  char b[128];
   switch(st.type){
+  case T_SYMLINK:
+    readlink(path,b,128);
+    char* pa = toname(path);
+    int len = strlen(b)+strlen(pa)+2;
+    memset(b+strlen(b), ' ', DIRSIZ-len);
+    printf("%s->%s %d %d %l\n",pa,b,st.type, st.ino, st.size);
+    break;
   case T_FILE:
     printf("%s %d %d %l\n", fmtname(path), st.type, st.ino, st.size);
     break;
@@ -63,7 +89,16 @@ ls(char *path)
         printf("ls: cannot stat %s\n", buf);
         continue;
       }
-      printf("%s %d %d %d\n", fmtname(buf), st.type, st.ino, st.size);
+      if(st.type == T_SYMLINK){
+        char* slinkpath = toname(buf);
+        readlink(slinkpath,b,128);
+        int len = strlen(b)+strlen(slinkpath)+2;
+        memset(b+strlen(b), ' ', DIRSIZ-len);
+        printf("%s->%s %d %d %d\n", slinkpath,b, st.type, st.ino, st.size);
+      }else{
+        printf("%s %d %d %d\n", fmtname(buf), st.type, st.ino, st.size);
+      }
+      
     }
     break;
   }
