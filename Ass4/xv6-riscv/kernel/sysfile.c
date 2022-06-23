@@ -261,7 +261,6 @@ sys_unlink(void)
     end_op();
     return -1;
   }
-  printf("path[%s], name: [%s]",path,name);
   ilock(dp);
 
   // Cannot unlink "." or "..".
@@ -541,7 +540,6 @@ sys_exec(void)
   else{
     ret= exec(path, argv);
   }
-  //printf("result[%d]  old path %s ----- new path: %s\n",result,path,new_path);
 
 
   for(i = 0; i < NELEM(argv) && argv[i] != 0; i++)
