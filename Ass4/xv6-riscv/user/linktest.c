@@ -79,10 +79,12 @@ open_extendTest()
 int
 main(int argc, char *argv[])
 {
-    softLinkTest();
-    int res = unlink("a.txt");
-    printf("unlinkres %d", res);
+    //printf("%d\n",O_RDWR & O_DONTREF);
+    //printf("%d\n",(O_RDWR | O_DONTREF) & O_DONTREF);
+    //softLinkTest();
+    //int res = unlink("a.txt");
+    //printf("unlinkres %d", res);
     //readlinkTest();
-    //open_extendTest();
+    open_extendTest();
     exit(0);
 }

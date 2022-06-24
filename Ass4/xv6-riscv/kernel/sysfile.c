@@ -49,12 +49,13 @@ do_deep(struct inode * ip)
 
 int
 exec_path(struct inode * ip, char* target){
+  ilock(ip);
   if(ip->type == T_SYMLINK){
     int cycle = 0;
     while(ip->type == T_SYMLINK){
       if(cycle == MAX_DEREFERENCE){
-        iunlockput(ip);
         end_op();
+        iunlockput(ip);
         return -1; // max cycle
       }
       cycle++;
@@ -65,10 +66,10 @@ exec_path(struct inode * ip, char* target){
         end_op();
         return -1; // target not exist
       }
+      ilock(ip);
       if(ip->type != T_SYMLINK){
         break;
-      }
-      ilock(ip);
+      }   
     }
     end_op();
     iunlockput(ip);
@@ -387,7 +388,7 @@ sys_open(void)
     end_op();
     return -1;
   }
-  if(!(omode & O_DONTREF)){
+   if(!(omode & O_DONTREF)){
     ip = do_deep(ip);
     if(ip == 0){
       return -1;
@@ -528,7 +529,6 @@ sys_exec(void)
   char new_path[MAXPATH];
   memset(new_path,0,MAXPATH);
   begin_op();
-  ilock(ip);
   int result = exec_path(ip,new_path);
   if(result == -1){
     goto bad;

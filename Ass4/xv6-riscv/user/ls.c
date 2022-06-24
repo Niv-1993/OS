@@ -3,6 +3,14 @@
 #include "user/user.h"
 #include "kernel/fs.h"
 
+
+#define O_RDONLY  0x000
+#define O_WRONLY  0x001
+#define O_RDWR    0x002
+#define O_CREATE  0x200
+#define O_TRUNC   0x400
+#define O_DONTREF 0x004
+
 char*
 fmtname(char *path)
 {
@@ -48,7 +56,7 @@ ls(char *path)
   int fd;
   struct dirent de;
   struct stat st;
-  fd = (strcmp(path,".") == 0 || strcmp(path,"..") == 0) ? open(path,0):open(path, 0 | 3);
+  fd = (strcmp(path,".") == 0 || strcmp(path,"..") == 0) ? open(path,O_RDONLY):open(path,O_RDONLY | O_DONTREF);
   if(fd < 0){
     fprintf(2, "ls: cannot open %s\n", path);
     return;
@@ -65,8 +73,10 @@ ls(char *path)
     readlink(path,b,128);
     char* pa = toname(path);
     int len = strlen(b)+strlen(pa)+2;
-    memset(b+strlen(b), ' ', DIRSIZ-len);
+    if(len < DIRSIZ)
+      memset(b+strlen(b), ' ', DIRSIZ-len);
     printf("%s->%s %d %d %l\n",pa,b,st.type, st.ino, st.size);
+    memset(b,0,128);
     break;
   case T_FILE:
     printf("%s %d %d %l\n", fmtname(path), st.type, st.ino, st.size);
@@ -93,12 +103,13 @@ ls(char *path)
         char* slinkpath = toname(buf);
         readlink(slinkpath,b,128);
         int len = strlen(b)+strlen(slinkpath)+2;
-        memset(b+strlen(b), ' ', DIRSIZ-len);
+        if(len < DIRSIZ)
+           memset(b+strlen(b), ' ', DIRSIZ-len);
         printf("%s->%s %d %d %d\n", slinkpath,b, st.type, st.ino, st.size);
+        memset(slinkpath,0,512);
       }else{
         printf("%s %d %d %d\n", fmtname(buf), st.type, st.ino, st.size);
       }
-      
     }
     break;
   }
